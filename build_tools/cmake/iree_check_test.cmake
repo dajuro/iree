@@ -79,7 +79,7 @@ function(iree_check_test)
         "-iree-mlir-to-vm-bytecode-module"
         "--iree-hal-target-backends=${_RULE_TARGET_BACKEND}"
         # TODO(ataei): Get target from arguments passed to build
-        "--iree-llvm-target-triple=aarch64-none-linux-android30"
+        "--iree-llvm-target-triple=aarch64-none-android-android30"
         ${_RULE_COMPILER_FLAGS}
       TESTONLY
     )
