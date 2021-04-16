@@ -18,7 +18,12 @@
 
 #include "absl/flags/flag.h"
 #include "iree/hal/local/loaders/legacy_library_loader.h"
+
+#ifdef IREE_WITH_SYNC_HAL
+#include "iree/hal/local/sync_driver.h"
+#else
 #include "iree/hal/local/task_driver.h"
+#endif
 
 // TODO(#4298): remove this driver registration and wrapper.
 // By having a single iree/hal/local/registration that then has the loaders

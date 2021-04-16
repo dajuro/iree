@@ -111,4 +111,38 @@ iree_cc_library(
   PUBLIC
 )
 
+iree_cc_library(
+  NAME
+    sync_driver
+  HDRS
+    "sync_command_buffer.h"
+    "sync_device.h"
+    "sync_driver.h"
+    "sync_event.h"
+    "sync_queue.h"
+    "sync_queue_state.h"
+    "sync_semaphore.h"
+  SRCS
+    "sync_command_buffer.c"
+    "sync_device.c"
+    "sync_driver.c"
+    "sync_event.c"
+    "sync_queue.c"
+    "sync_queue_state.c"
+    "sync_semaphore.c"
+  DEPS
+    ::arena
+    ::event_pool
+    ::local
+    iree::base::api
+    iree::base::core_headers
+    iree::base::internal
+    iree::base::internal::wait_handle
+    iree::base::synchronization
+    iree::base::tracing
+    iree::hal::api
+    iree::task
+  PUBLIC
+)
+
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###

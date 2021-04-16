@@ -14,6 +14,14 @@ if(NOT ${IREE_HAL_DRIVER_DYLIB})
   return()
 endif()
 
+set(IREE_HAL_DEPS "")
+if(${IREE_WITH_SYNCHRONOUS_HAL})
+  list(APPEND IREE_HAL_DEPS iree::hal::local::sync_driver)
+else()
+  list(APPEND IREE_HAL_DEPS iree::hal::local::task_driver)
+endif()
+
+
 iree_cc_library(
   NAME
     registration
@@ -25,7 +33,7 @@ iree_cc_library(
     absl::flags
     iree::hal::api
     iree::hal::local::loaders::legacy_library_loader
-    iree::hal::local::task_driver
+    ${IREE_HAL_DEPS}
   DEFINES
     "IREE_HAL_HAVE_DYLIB_DRIVER_MODULE=1"
   PUBLIC

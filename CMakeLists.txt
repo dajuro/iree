@@ -48,6 +48,8 @@ set(IREE_HAL_DRIVERS_TO_BUILD "all"
 set(IREE_TARGET_BACKENDS_TO_BUILD "all"
   CACHE STRING "Semicolon-separated list of target backends to build, or \"all\".")
 
+option(IREE_WITH_SYNCHRONOUS_HAL "Builds a synchronous HAL." OFF)
+
 # Properties controlling version and naming of release artifacts.
 set(IREE_RELEASE_PACKAGE_SUFFIX "-dev" CACHE STRING "Suffix to append to distributed package names")
 set(IREE_RELEASE_VERSION "0.1a1" CACHE STRING "Version to embed in distributed packages")
@@ -179,6 +181,10 @@ list(APPEND CMAKE_MODULE_PATH
   ${CMAKE_CURRENT_LIST_DIR}/bindings/python/build_tools/cmake/
   ${CMAKE_CURRENT_LIST_DIR}/third_party/abseil-cpp/absl/copts/
 )
+
+if(${IREE_WITH_SYNCHRONOUS_HAL})
+  add_definitions(-DIREE_WITH_SYNC_HAL)
+endif()
 
 #-------------------------------------------------------------------------------
 # IREE compilation toolchain configuration
