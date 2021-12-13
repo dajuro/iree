@@ -1462,6 +1462,9 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
     auto ctx = funcOp.getContext();
     auto loc = funcOp.getLoc();
 
+    IREE::VM::EmitCTypeConverter *typeConverter =
+        this->template getTypeConverter<IREE::VM::EmitCTypeConverter>();
+
     rewriter.startRootUpdate(funcOp.getOperation());
     // Cast void pointers to module and module struct pointers.
 
@@ -1500,9 +1503,17 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
     // TODO:
     // - call macros to typedef the result struct
     // - unpack arguments to new Values
+
+    auto vmAnalysis = typeConverter->lookupAnalysis(funcOp);
+    if (failed(vmAnalysis)) {
+      return funcOp.emitError() << "func op not found in cache.";
+    }
+
+    FunctionType funcType = vmAnalysis.getValue().get().originalFunctionType;
+
     std::string argsStructBody;
-    for (unsigned int i = kNumArguments; i < funcOp.getNumArguments(); ++i) {
-      Type type = funcOp.getArgument(i).getType();
+    for (unsigned int i = 0; i < funcType.getNumInputs(); ++i) {
+      Type type = funcType.getInputs()[i];
       Optional<std::string> cType = getCType(type, false);
       if (!cType.hasValue()) {
         return funcOp.emitError() << "unable to map function argument type to "
@@ -1511,15 +1522,14 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
       argsStructBody += cType.getValue() + " arg" + std::to_string(i) + ";\n";
     }
     std::string resultStructBody;
-    for (unsigned int i = kNumArguments; i < funcOp.getNumArguments(); ++i) {
-      Type type = funcOp.getArgument(i).getType();
+    for (unsigned int i = 0; i < funcType.getNumResults(); ++i) {
+      Type type = funcType.getResults()[i];
       Optional<std::string> cType = getCType(type, false);
       if (!cType.hasValue()) {
         return funcOp.emitError() << "unable to map function result type to "
                                      "c type in argument struct declaration.";
       }
-      resultStructBody +=
-          cType.getValue() + " result" + std::to_string(i) + ";\n";
+      resultStructBody += cType.getValue() + " res" + std::to_string(i) + ";\n";
     }
 
     // TODO(simon-camp): Clean up. We generate calls to a macro that defines a
@@ -1615,7 +1625,7 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
 
     // cast
     std::string resultType = resultTypeName + "*";
-    rewriter.create<emitc::CallOp>(
+    auto results = rewriter.create<emitc::CallOp>(
         /*location=*/loc,
         /*type=*/emitc::OpaqueType::get(ctx, resultType),
         /*callee=*/StringAttr::get(ctx, "EMITC_CAST"),
@@ -1625,9 +1635,10 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
         /*templateArgs=*/ArrayAttr{},
         /*operands=*/ArrayRef<Value>{resultsData.getResult(0)});
 
+    vmAnalysis.getValue().get().resultStruct = results.getResult(0);
+
     TypeConverter::SignatureConversion signatureConverter(
         funcOp.getType().getNumInputs());
-    TypeConverter typeConverter;
 
     llvm::errs() << "Populating signature conversion\n";
     for (const auto &arg : llvm::enumerate(funcOp.getArguments())) {
@@ -1647,15 +1658,15 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
 
         // Unpack argument
         // TODO(simon-camp): IREE::VM::RefTypes need to be speical cased.
+        int64_t argIndex = arg.index() - kNumArguments;
         auto argument = rewriter.create<emitc::CallOp>(
             /*location=*/loc,
             /*type=*/resultType,
             /*callee=*/StringAttr::get(ctx, "EMITC_STRUCT_PTR_MEMBER"),
             /*args=*/
-            ArrayAttr::get(ctx,
-                           {rewriter.getIndexAttr(0),
-                            emitc::OpaqueAttr::get(
-                                ctx, "arg" + std::to_string(arg.index()))}),
+            ArrayAttr::get(ctx, {rewriter.getIndexAttr(0),
+                                 emitc::OpaqueAttr::get(
+                                     ctx, "arg" + std::to_string(argIndex))}),
             /*templateArgs=*/ArrayAttr{},
             /*operands=*/ArrayRef<Value>{arguments.getResult(0)});
 
@@ -1665,9 +1676,6 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
 
     rewriter.applySignatureConversion(&funcOp.getBody(), signatureConverter);
 
-    for (Type type : signatureConverter.getConvertedTypes()) {
-      llvm::errs() << "Type: " << type << "\n";
-    }
     // Creates a new function with the updated signature.
     // rewriter.updateRootInPlace(funcOp, [&] {
     //   funcOp.setType(
@@ -2515,44 +2523,29 @@ class ReturnOpConversion : public OpConversionPattern<IREE::VM::ReturnOp> {
     IREE::VM::EmitCTypeConverter *typeConverter =
         getTypeConverter<IREE::VM::EmitCTypeConverter>();
 
-    // The result variables are the last N arguments of the function.
-    unsigned int firstOutputArgumentIndex =
-        funcOp.getNumArguments() - op.getOperands().size();
+    auto vmAnalysis = typeConverter->lookupAnalysis(funcOp);
+    if (failed(vmAnalysis)) {
+      return op.emitError() << "parent func op not found in cache.";
+    }
+
+    Value resultStruct = vmAnalysis.getValue().get().resultStruct;
+
+    assert(resultStruct);
 
     for (auto &pair : llvm::enumerate(op.getOperands())) {
-      Value operand = pair.value();
-      size_t index = pair.index();
-
-      unsigned int argumentIndex = firstOutputArgumentIndex + index;
-      BlockArgument resultArgument = funcOp.getArgument(argumentIndex);
-
-      if (operand.getType().isa<IREE::VM::RefType>()) {
-        assert(operand.getType() !=
-               emitc::OpaqueType::get(ctx, "iree_vm_ref_t*"));
-
-        Optional<Value> operandRef = typeConverter->materializeRef(operand);
-
-        if (!operandRef.hasValue()) {
-          return op->emitError() << "local ref not found";
-        }
-
-        rewriter.create<emitc::CallOp>(
-            /*location=*/loc,
-            /*type=*/TypeRange{},
-            /*callee=*/StringAttr::get(ctx, "iree_vm_ref_move"),
-            /*args=*/ArrayAttr{},
-            /*templateArgs=*/ArrayAttr{},
-            /*operands=*/
-            ArrayRef<Value>{operandRef.getValue(), resultArgument});
-      } else {
-        rewriter.create<emitc::CallOp>(
-            /*location=*/loc,
-            /*type=*/TypeRange{},
-            /*callee=*/StringAttr::get(ctx, "EMITC_DEREF_ASSIGN_VALUE"),
-            /*args=*/ArrayAttr{},
-            /*templateArgs=*/ArrayAttr{},
-            /*operands=*/ArrayRef<Value>{resultArgument, operand});
-      }
+      // TODO(simon-camp): Special case ref type.
+      int64_t resIndex = pair.index();
+      rewriter.create<emitc::CallOp>(
+          /*location=*/loc,
+          /*type=*/TypeRange{},
+          /*callee=*/StringAttr::get(ctx, "EMITC_STRUCT_PTR_MEMBER_ASSIGN"),
+          /*args=*/
+          ArrayAttr::get(ctx, {rewriter.getIndexAttr(0),
+                               emitc::OpaqueAttr::get(
+                                   ctx, "res" + std::to_string(resIndex)),
+                               rewriter.getIndexAttr(1)}),
+          /*templateArgs=*/ArrayAttr{},
+          /*operands=*/ArrayRef<Value>{resultStruct, pair.value()});
     }
 
     releaseRefs(rewriter, loc, funcOp, *typeConverter);
