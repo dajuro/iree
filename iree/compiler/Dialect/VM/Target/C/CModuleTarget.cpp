@@ -398,11 +398,14 @@ LogicalResult translateModuleToC(IREE::VM::ModuleOp moduleOp,
   output << "// DEFINE FUNCTIONS\n";
 
   // Emit code for functions skipping those marked with `vm.emit_at_end`.
-  for (auto funcOp : moduleOp.getOps<mlir::FuncOp>()) {
-    Operation *op = funcOp.getOperation();
-    if (op->hasAttr("vm.emit_at_end")) continue;
-    if (op->hasAttr("emitc.static")) output << "static ";
-    if (failed(emitter.emitOperation(*funcOp.getOperation(),
+  for (Operation &op : moduleOp.getOps()) {
+    // TODO(simon-camp): Clean up. We generate calls to a macro that defines a
+    // struct. As we declare all variables at the start of the function, the
+    // macro call cannot be inlined into the function.
+    if (!isa<mlir::FuncOp, emitc::CallOp>(op)) continue;
+    if (op.hasAttr("vm.emit_at_end")) continue;
+    if (op.hasAttr("emitc.static")) output << "static ";
+    if (failed(emitter.emitOperation(op,
                                      /*trailingSemicolon=*/false)))
       return failure();
   }

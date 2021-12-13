@@ -543,7 +543,7 @@ emitc::CallOp failableCall(
   }
 
   builder.setInsertionPointToEnd(condBlock);
-  builder.create<IREE::VM::CondBranchOp>(
+  builder.create<mlir::CondBranchOp>(
       location, conditionI1.getResult(0),
       negateCondition ? failureBlock : continuationBlock,
       negateCondition ? continuationBlock : failureBlock);
@@ -647,7 +647,7 @@ mlir::CallOp failableCall(
   }
 
   builder.setInsertionPointToEnd(condBlock);
-  builder.create<IREE::VM::CondBranchOp>(
+  builder.create<mlir::CondBranchOp>(
       location, conditionI1.getResult(0),
       negateCondition ? failureBlock : continuationBlock,
       negateCondition ? continuationBlock : failureBlock);
@@ -672,6 +672,47 @@ mlir::CallOp returnIfError(OpBuilder &builder, Location location,
 
   return failableCall(builder, location, callee, operands, blockBuilder,
                       /*negateResult=*/true);
+}
+
+Value castToModule(mlir::OpBuilder builder, mlir::Location loc,
+                   IREE::VM::ModuleOp moduleOp, Value module) {
+  auto ctx = builder.getContext();
+
+  std::string moduleName{moduleOp.getName()};
+  std::string moduleTypeName = moduleName + "_t*";
+
+  return builder
+      .create<emitc::CallOp>(
+          /*location=*/loc,
+          /*type=*/emitc::OpaqueType::get(ctx, moduleTypeName),
+          /*callee=*/StringAttr::get(ctx, "EMITC_CAST"),
+          /*args=*/
+          ArrayAttr::get(ctx, {builder.getIndexAttr(0),
+                               emitc::OpaqueAttr::get(ctx, moduleTypeName)}),
+          /*templateArgs=*/ArrayAttr{},
+          /*operands=*/ArrayRef<Value>{module})
+      .getResult(0);
+}
+
+Value castToModuleState(mlir::OpBuilder builder, mlir::Location loc,
+                        IREE::VM::ModuleOp moduleOp, Value moduleState) {
+  auto ctx = builder.getContext();
+
+  std::string moduleName{moduleOp.getName()};
+  std::string moduleStateTypeName = moduleName + "_state_t*";
+
+  return builder
+      .create<emitc::CallOp>(
+          /*location=*/loc,
+          /*type=*/emitc::OpaqueType::get(ctx, moduleStateTypeName),
+          /*callee=*/StringAttr::get(ctx, "EMITC_CAST"),
+          /*args=*/
+          ArrayAttr::get(ctx,
+                         {builder.getIndexAttr(0),
+                          emitc::OpaqueAttr::get(ctx, moduleStateTypeName)}),
+          /*templateArgs=*/ArrayAttr{},
+          /*operands=*/ArrayRef<Value>{moduleState})
+      .getResult(0);
 }
 
 LogicalResult createAPIFunctions(IREE::VM::ModuleOp moduleOp,
@@ -705,15 +746,18 @@ LogicalResult createAPIFunctions(IREE::VM::ModuleOp moduleOp,
 
     std::string moduleTypeName = moduleName + "_t*";
 
-    auto castedModuleOp = builder.create<emitc::CallOp>(
-        /*location=*/loc,
-        /*type=*/emitc::OpaqueType::get(ctx, moduleTypeName),
-        /*callee=*/StringAttr::get(ctx, "EMITC_CAST"),
-        /*args=*/
-        ArrayAttr::get(ctx, {builder.getIndexAttr(0),
-                             emitc::OpaqueAttr::get(ctx, moduleTypeName)}),
-        /*templateArgs=*/ArrayAttr{},
-        /*operands=*/ArrayRef<Value>{funcOp.getArgument(0)});
+    // auto castedModuleOp = builder.create<emitc::CallOp>(
+    //     /*location=*/loc,
+    //     /*type=*/emitc::OpaqueType::get(ctx, moduleTypeName),
+    //     /*callee=*/StringAttr::get(ctx, "EMITC_CAST"),
+    //     /*args=*/
+    //     ArrayAttr::get(ctx, {builder.getIndexAttr(0),
+    //                          emitc::OpaqueAttr::get(ctx, moduleTypeName)}),
+    //     /*templateArgs=*/ArrayAttr{},
+    //     /*operands=*/ArrayRef<Value>{funcOp.getArgument(0)});
+
+    Value castedModule =
+        castToModule(builder, loc, moduleOp, funcOp.getArgument(0));
 
     auto allocatorOp = builder.create<emitc::CallOp>(
         /*location=*/loc,
@@ -723,7 +767,7 @@ LogicalResult createAPIFunctions(IREE::VM::ModuleOp moduleOp,
         ArrayAttr::get(ctx, {builder.getIndexAttr(0),
                              emitc::OpaqueAttr::get(ctx, "allocator")}),
         /*templateArgs=*/ArrayAttr{},
-        /*operands=*/ArrayRef<Value>{castedModuleOp.getResult(0)});
+        /*operands=*/ArrayRef<Value>{castedModule});
 
     builder.create<emitc::CallOp>(
         /*location=*/loc,
@@ -732,7 +776,7 @@ LogicalResult createAPIFunctions(IREE::VM::ModuleOp moduleOp,
         /*args=*/ArrayAttr{},
         /*templateArgs=*/ArrayAttr{},
         /*operands=*/
-        ArrayRef<Value>{allocatorOp.getResult(0), castedModuleOp.getResult(0)});
+        ArrayRef<Value>{allocatorOp.getResult(0), castedModule});
 
     builder.create<mlir::ReturnOp>(loc);
   }
@@ -1298,8 +1342,8 @@ LogicalResult createAPIFunctions(IREE::VM::ModuleOp moduleOp,
 
     builder.setInsertionPointToEnd(condBlock);
 
-    builder.create<IREE::VM::CondBranchOp>(loc, vmInitializeIsOk.getResult(0),
-                                           continuationBlock, failureBlock);
+    builder.create<mlir::CondBranchOp>(loc, vmInitializeIsOk.getResult(0),
+                                       continuationBlock, failureBlock);
 
     builder.setInsertionPointToStart(continuationBlock);
 
@@ -1419,6 +1463,12 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
     auto loc = funcOp.getLoc();
 
     rewriter.startRootUpdate(funcOp.getOperation());
+    // Cast void pointers to module and module struct pointers.
+
+    // auto moduleOp =
+    //     funcOp.getOperation()->getParentOfType<IREE::VM::ModuleOp>();
+    // emitc::CallOp castedModuleOp =
+    //     castToModule(rewriter, loc, moduleOp, funcOp.getArgument(2));
 
     // unpack inputs
     /*
@@ -1448,12 +1498,9 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
 
     rewriter.setInsertionPointToStart(&entryBlock);
     // TODO:
-    // - call macros to typedef the argument struct
     // - call macros to typedef the result struct
     // - unpack arguments to new Values
-    std::string structBody;
-
-    // vI = args->argI;
+    std::string argsStructBody;
     for (unsigned int i = kNumArguments; i < funcOp.getNumArguments(); ++i) {
       Type type = funcOp.getArgument(i).getType();
       Optional<std::string> cType = getCType(type, false);
@@ -1461,19 +1508,51 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
         return funcOp.emitError() << "unable to map function argument type to "
                                      "c type in argument struct declaration.";
       }
-      structBody += cType.getValue() + " arg" + std::to_string(i) + ";\n";
+      argsStructBody += cType.getValue() + " arg" + std::to_string(i) + ";\n";
+    }
+    std::string resultStructBody;
+    for (unsigned int i = kNumArguments; i < funcOp.getNumArguments(); ++i) {
+      Type type = funcOp.getArgument(i).getType();
+      Optional<std::string> cType = getCType(type, false);
+      if (!cType.hasValue()) {
+        return funcOp.emitError() << "unable to map function result type to "
+                                     "c type in argument struct declaration.";
+      }
+      resultStructBody +=
+          cType.getValue() + " result" + std::to_string(i) + ";\n";
     }
 
-    llvm::errs() << "Generating argument struct\n";
-    rewriter.create<emitc::CallOp>(
-        /*location=*/loc,
-        /*type=*/TypeRange{},
-        /*callee=*/StringAttr::get(ctx, "EMITC_TYPEDEF_STRUCT"),
-        /*args=*/
-        ArrayAttr::get(ctx, {emitc::OpaqueAttr::get(ctx, "args_t"),
-                             emitc::OpaqueAttr::get(ctx, structBody)}),
-        /*templateArgs=*/ArrayAttr{},
-        /*operands=*/ArrayRef<Value>{});
+    // TODO(simon-camp): Clean up. We generate calls to a macro that defines a
+    // struct. As we declare all variables at the start of the function, the
+    // macro call cannot be inlined into the function.
+
+    // Because of scoping issues we prefix the name with module and function
+    // name.
+    std::string argsTypeName = (funcOp.getName() + "_args_t").str();
+    std::string resultTypeName = (funcOp.getName() + "_result_t").str();
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(funcOp.getOperation());
+
+      rewriter.create<emitc::CallOp>(
+          /*location=*/loc,
+          /*type=*/TypeRange{},
+          /*callee=*/StringAttr::get(ctx, "EMITC_TYPEDEF_STRUCT"),
+          /*args=*/
+          ArrayAttr::get(ctx, {emitc::OpaqueAttr::get(ctx, argsTypeName),
+                               emitc::OpaqueAttr::get(ctx, argsStructBody)}),
+          /*templateArgs=*/ArrayAttr{},
+          /*operands=*/ArrayRef<Value>{});
+      rewriter.create<emitc::CallOp>(
+          /*location=*/loc,
+          /*type=*/TypeRange{},
+          /*callee=*/StringAttr::get(ctx, "EMITC_TYPEDEF_STRUCT"),
+          /*args=*/
+          ArrayAttr::get(ctx, {emitc::OpaqueAttr::get(ctx, resultTypeName),
+                               emitc::OpaqueAttr::get(ctx, resultStructBody)}),
+          /*templateArgs=*/ArrayAttr{},
+          /*operands=*/ArrayRef<Value>{});
+    }
 
     // const args_t* args = (const args_t*)call->arguments.data;
     // call->arguments
@@ -1499,18 +1578,52 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
         /*operands=*/ArrayRef<Value>{callArguments.getResult(0)});
 
     // cast
+    std::string argumentsType = "const " + argsTypeName + "*";
     auto arguments = rewriter.create<emitc::CallOp>(
         /*location=*/loc,
-        /*type=*/emitc::OpaqueType::get(ctx, "const args_t*"),
+        /*type=*/emitc::OpaqueType::get(ctx, argumentsType),
         /*callee=*/StringAttr::get(ctx, "EMITC_CAST"),
         /*args=*/
         ArrayAttr::get(ctx, {rewriter.getIndexAttr(0),
-                             emitc::OpaqueAttr::get(ctx, "const args_t*")}),
+                             emitc::OpaqueAttr::get(ctx, argumentsType)}),
         /*templateArgs=*/ArrayAttr{},
         /*operands=*/ArrayRef<Value>{argumentsData.getResult(0)});
 
     // TODO(simon-camp): Cast result struct
     // results_t* results = (results_t*)call->results.data;
+    // call->results
+    auto callResults = rewriter.create<emitc::CallOp>(
+        /*location=*/loc,
+        /*type=*/emitc::OpaqueType::get(ctx, "iree_byte_span_t"),
+        /*callee=*/StringAttr::get(ctx, "EMITC_STRUCT_PTR_MEMBER"),
+        /*args=*/
+        ArrayAttr::get(ctx, {rewriter.getIndexAttr(0),
+                             emitc::OpaqueAttr::get(ctx, "results")}),
+        /*templateArgs=*/ArrayAttr{},
+        /*operands=*/ArrayRef<Value>{funcOp.getArgument(1)});
+
+    // results.data
+    auto resultsData = rewriter.create<emitc::CallOp>(
+        /*location=*/loc,
+        /*type=*/emitc::OpaqueType::get(ctx, "uint8_t*"),
+        /*callee=*/StringAttr::get(ctx, "EMITC_STRUCT_MEMBER"),
+        /*args=*/
+        ArrayAttr::get(ctx, {rewriter.getIndexAttr(0),
+                             emitc::OpaqueAttr::get(ctx, "data")}),
+        /*templateArgs=*/ArrayAttr{},
+        /*operands=*/ArrayRef<Value>{callResults.getResult(0)});
+
+    // cast
+    std::string resultType = resultTypeName + "*";
+    rewriter.create<emitc::CallOp>(
+        /*location=*/loc,
+        /*type=*/emitc::OpaqueType::get(ctx, resultType),
+        /*callee=*/StringAttr::get(ctx, "EMITC_CAST"),
+        /*args=*/
+        ArrayAttr::get(ctx, {rewriter.getIndexAttr(0),
+                             emitc::OpaqueAttr::get(ctx, resultType)}),
+        /*templateArgs=*/ArrayAttr{},
+        /*operands=*/ArrayRef<Value>{resultsData.getResult(0)});
 
     TypeConverter::SignatureConversion signatureConverter(
         funcOp.getType().getNumInputs());
@@ -1518,17 +1631,25 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
 
     llvm::errs() << "Populating signature conversion\n";
     for (const auto &arg : llvm::enumerate(funcOp.getArguments())) {
+      Type convertedType =
+          getTypeConverter()->convertType(arg.value().getType());
       if (arg.index() < kNumArguments) {
-        Type convertedType =
-            getTypeConverter()->convertType(arg.value().getType());
         signatureConverter.addInputs(arg.index(), convertedType);
       } else {
-        Optional<std::string> cType = getCType(arg.value().getType(), false);
+        // TODO(simon-camp): Cleanup this up
+        Type resultType;
+        if (convertedType.isa<mlir::IntegerType>()) {
+          resultType = convertedType;
+        } else {
+          Optional<std::string> cType = getCType(arg.value().getType(), false);
+          resultType = emitc::OpaqueType::get(ctx, cType.getValue());
+        }
 
         // Unpack argument
+        // TODO(simon-camp): IREE::VM::RefTypes need to be speical cased.
         auto argument = rewriter.create<emitc::CallOp>(
             /*location=*/loc,
-            /*type=*/emitc::OpaqueType::get(ctx, cType.getValue()),
+            /*type=*/resultType,
             /*callee=*/StringAttr::get(ctx, "EMITC_STRUCT_PTR_MEMBER"),
             /*args=*/
             ArrayAttr::get(ctx,
@@ -1537,9 +1658,6 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
                                 ctx, "arg" + std::to_string(arg.index()))}),
             /*templateArgs=*/ArrayAttr{},
             /*operands=*/ArrayRef<Value>{arguments.getResult(0)});
-
-        // TODO(simon-camp): replace all uses of arg.value() with
-        // argument.getResult(0). IREE::VM::RefTypes need to be speical cased.
 
         signatureConverter.remapInput(arg.index(), argument.getResult(0));
       }
@@ -1652,7 +1770,8 @@ class CallOpConversion : public OpConversionPattern<CallOpTy> {
 
     auto funcOp = op->getParentOfType<mlir::FuncOp>();
     BlockArgument stackArg = funcOp.getArgument(0);
-    BlockArgument stateArg = funcOp.getArgument(2);
+    Value stateArg =
+        castToModuleState(rewriter, loc, moduleOp, funcOp.getArgument(3));
 
     auto imports = rewriter.create<emitc::CallOp>(
         /*location=*/loc,
@@ -3781,7 +3900,7 @@ class ConvertVMToEmitCPass
         mlir::arith::ArithmeticDialect, mlir::math::MathDialect>();
 
     target.addDynamicallyLegalOp<mlir::FuncOp>([&](mlir::FuncOp op) {
-      // TODO(simon-camp):
+      // TODO(simon-camp): Cleanup
       return op.getNumArguments() == 5;
     });
 
