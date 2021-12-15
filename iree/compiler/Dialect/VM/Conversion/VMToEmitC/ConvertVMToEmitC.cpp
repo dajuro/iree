@@ -1489,7 +1489,7 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
     */
 
     // The first arguments are (stack, call, module, module_state, execution
-    // result). Followed by the orignal arguments, which we need to replace
+    // result). Followed by the original arguments, which we need to replace
     // here.
     const unsigned int kNumArguments = 5;
     if (funcOp.getNumArguments() < kNumArguments) {
@@ -1657,7 +1657,7 @@ class FuncOpConversion : public OpConversionPattern<mlir::FuncOp> {
         }
 
         // Unpack argument
-        // TODO(simon-camp): IREE::VM::RefTypes need to be speical cased.
+        // TODO(simon-camp): IREE::VM::RefTypes need to be special cased.
         int64_t argIndex = arg.index() - kNumArguments;
         auto argument = rewriter.create<emitc::CallOp>(
             /*location=*/loc,

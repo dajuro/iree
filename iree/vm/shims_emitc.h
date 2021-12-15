@@ -110,8 +110,10 @@
 #define EMITC_FIXED_TYPEDEF_IMPL(arg_types, ret_types, input_parameters, \
                                  output_parameters)                      \
   typedef iree_status_t (*call_0##arg_types##_##ret_types##_t)(          \
-      iree_vm_stack_t * IREE_RESTRICT stack, void* IREE_RESTRICT module, \
-      void* IREE_RESTRICT module_state input_parameters output_parameters);
+      iree_vm_stack_t * IREE_RESTRICT stack,                             \
+      iree_vm_function_call_t * IREE_RESTRICT call,                      \
+      void* IREE_RESTRICT module, void* IREE_RESTRICT module_state,      \
+      iree_vm_execution_result_t* IREE_RESTRICT);
 
 // TODO(simon-camp): We should check the args and rets pointers for NULL, but
 // need to special case type 'v'
@@ -119,18 +121,11 @@
                               output_arguments)                      \
   static iree_status_t call_0##arg_types##_##ret_types##_shim(       \
       iree_vm_stack_t* IREE_RESTRICT stack,                          \
-      const iree_vm_function_call_t* IREE_RESTRICT call,             \
+      iree_vm_function_call_t* IREE_RESTRICT call,                   \
       call_0##arg_types##_##ret_types##_t target_fn,                 \
       void* IREE_RESTRICT module, void* IREE_RESTRICT module_state,  \
       iree_vm_execution_result_t* IREE_RESTRICT out_result) {        \
-    /*const*/ IREE_VM_ABI_TYPE_NAME(arg_types)* args =               \
-        iree_vm_abi_##arg_types##_checked_deref(call->arguments);    \
-    IREE_VM_ABI_TYPE_NAME(ret_types)* rets =                         \
-        iree_vm_abi_##ret_types##_checked_deref(call->results);      \
-                                                                     \
-    iree_vm_abi_##ret_types##_reset(rets);                           \
-    return target_fn(stack, module,                                  \
-                     module_state input_arguments output_arguments); \
+    return target_fn(stack, call, module, module_state, out_result); \
   }
 
 #define EMITC_FIXED_IMPORT_IMPL(arg_types, ret_types, input_parameters,    \
